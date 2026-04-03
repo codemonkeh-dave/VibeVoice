@@ -13,11 +13,44 @@ import threading
 import requests
 import sounddevice as sd
 
+from text_normalize import normalize_for_speech
+
 SERVER_URL = "http://127.0.0.1:8723"
 SERVER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "say_server.py")
 VENV_PYTHON = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".venv", "bin", "python")
 PID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".say_server.pid")
+PLAYER_PID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".say_player.pid")
 SAMPLE_RATE = 24000
+
+
+def kill_previous_player():
+    """Kill any currently playing say.py instance."""
+    if not os.path.exists(PLAYER_PID_FILE):
+        return
+    try:
+        with open(PLAYER_PID_FILE) as f:
+            pid = int(f.read().strip())
+        if pid != os.getpid():
+            os.kill(pid, signal.SIGTERM)
+    except (ValueError, ProcessLookupError, OSError):
+        pass
+
+
+def register_player():
+    """Write our PID so the next invocation can kill us."""
+    with open(PLAYER_PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
+
+def cleanup_player():
+    """Remove PID file if it's still ours."""
+    try:
+        with open(PLAYER_PID_FILE) as f:
+            pid = int(f.read().strip())
+        if pid == os.getpid():
+            os.unlink(PLAYER_PID_FILE)
+    except (ValueError, FileNotFoundError, OSError):
+        pass
 
 
 def server_running():
@@ -94,6 +127,7 @@ def list_voices():
 
 
 def say(text, voice, cfg):
+    text = normalize_for_speech(text)
     ensure_server()
 
     r = requests.post(f"{SERVER_URL}/stream", json={
@@ -158,6 +192,7 @@ def main():
     parser.add_argument("--cfg", type=float, default=1.5, help="CFG scale (default: 1.5)")
     parser.add_argument("--server", action="store_true", help="Just start the server, don't say anything")
     parser.add_argument("--stop", action="store_true", help="Stop the running server")
+    parser.add_argument("--queue", action="store_true", help="Queue behind previous playback instead of interrupting it")
     args = parser.parse_args()
 
     if args.stop:
@@ -180,7 +215,14 @@ def main():
     if not text:
         parser.error("No text provided. Pass text as arguments or pipe via stdin.")
 
-    say(text, args.voice, args.cfg)
+    if not args.queue:
+        kill_previous_player()
+
+    register_player()
+    try:
+        say(text, args.voice, args.cfg)
+    finally:
+        cleanup_player()
 
 
 if __name__ == "__main__":
