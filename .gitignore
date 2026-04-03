@@ -176,3 +176,5 @@ tags
 exp
 .gradio/
 experimental_voices
+.say_server.pid
+say_server.log
